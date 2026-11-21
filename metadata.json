@@ -1,0 +1,6 @@
+{
+  "name": "MY CINEMA",
+  "description": "MY CINEMA streaming Android application with Media3 ExoPlayer, smart state preservation, continue watching progress tracking, and Firebase sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

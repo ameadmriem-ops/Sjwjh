@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fallback Firebase project identifiers for hamza-4b70c -->
+    <!-- Primary Android resources (project_id, google_app_id, gcm_defaultSenderId, default_web_client_id) are generated from app/google-services.json -->
+    <string name="firebase_project_id" translatable="false">hamza-4b70c</string>
+    <string name="firebase_gcm_sender_id" translatable="false">595903053058</string>
+    <string name="firebase_storage_bucket" translatable="false">hamza-4b70c.firebasestorage.app</string>
+    <string name="firebase_fallback_app_id" translatable="false">1:595903053058:android:b855cb828befb352d4561b</string>
+</resources>
