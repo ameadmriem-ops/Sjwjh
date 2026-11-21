@@ -4487,6 +4487,24 @@ body.light-mode .chunk-load-more-btn {
           <input id="editEpAltTitlesInput" class="input" placeholder="مثال: حلقة 1, الحلقة الأولى, Special">
         </div>
 
+        <div style="background:#0d131a;border:1px solid #1e3246;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <label style="font-size:12px;font-weight:bold;color:#38bdf8">⏭️ توقيت تخطي المقدمة لهذه الحلقة (اختياري):</label>
+            <button type="button" onclick="window.clearEditEpSkipIntro()" style="background:#1c1c1c;color:#aaa;border:1px solid #333;padding:3px 8px;border-radius:6px;font-size:11px;cursor:pointer">مسح التوقيت</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:3px">وقت البداية (Start Time):</label>
+              <input id="editEpSkipStartInput" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="00:01:30">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:3px">وقت النهاية (End Time):</label>
+              <input id="editEpSkipEndInput" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="00:03:15">
+            </div>
+          </div>
+          <span style="font-size:11px;color:#64748b">الصيغة: HH:MM:SS أو MM:SS — اتركهما فارغين لإخفاء زر التخطي في هذه الحلقة.</span>
+        </div>
+
         <div style="display:flex;gap:10px;margin-top:8px">
           <button id="saveEditEpBtn" onclick="saveEditedEpisode()" style="flex:1;background:linear-gradient(135deg,#e50914,#b80610);color:#fff;border:none;padding:12px;border-radius:10px;font-weight:bold;font-size:15px;cursor:pointer">💾 حفظ التعديلات</button>
           <button onclick="closeEditEpisodeModal()" style="background:#1c1c1c;color:#aaa;border:1px solid #333;padding:12px 18px;border-radius:10px;cursor:pointer;font-size:14px">إلغاء</button>
@@ -4879,6 +4897,20 @@ body.light-mode .chunk-load-more-btn {
             <option value="لم يصدر بعد">لم يصدر بعد (Upcoming)</option>
           </select>
         </div>
+        </div>
+
+        <div id="editContentSkipIntroSection" style="display:none;background:#0d131a;border:1px solid #1e3246;border-radius:10px;padding:10px;flex-direction:column;gap:8px">
+          <label style="font-size:12px;font-weight:bold;color:#38bdf8">⏭️ تخطي المقدمة للفيلم / البث الرئيسي (اختياري):</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:3px">وقت البداية (Start):</label>
+              <input id="editContentSkipStartInput" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="00:01:30">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:3px">وقت النهاية (End):</label>
+              <input id="editContentSkipEndInput" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="00:03:15">
+            </div>
+          </div>
         </div>
 
         <!-- Section: التصنيفات (Genres) -->
@@ -9428,6 +9460,98 @@ window.enqueuePosterLoad = function(img) {
   }
 };
 
+// ================= Skip Intro Time Parsing & Validation Helpers =================
+window.normalizeArabicDigits = function(str) {
+  return String(str || "").replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+};
+
+window.parseSkipTimeToSec = function(raw) {
+  const s = window.normalizeArabicDigits(raw).trim();
+  if (!s) return null;
+  if (/^\d+$/.test(s)) {
+    const val = parseInt(s, 10);
+    return (isFinite(val) && val >= 0) ? val : -1;
+  }
+  const parts = s.split(":");
+  if (parts.length === 2) {
+    if (!/^\d+$/.test(parts[0]) || !/^\d{1,2}$/.test(parts[1])) return -1;
+    const min = parseInt(parts[0], 10);
+    const sec = parseInt(parts[1], 10);
+    if (sec < 0 || sec >= 60 || min < 0) return -1;
+    return (min * 60) + sec;
+  }
+  if (parts.length === 3) {
+    if (!/^\d+$/.test(parts[0]) || !/^\d{1,2}$/.test(parts[1]) || !/^\d{1,2}$/.test(parts[2])) return -1;
+    const hr = parseInt(parts[0], 10);
+    const min = parseInt(parts[1], 10);
+    const sec = parseInt(parts[2], 10);
+    if (hr < 0 || min < 0 || min >= 60 || sec < 0 || sec >= 60) return -1;
+    return (hr * 3600) + (min * 60) + sec;
+  }
+  return -1;
+};
+
+window.formatSkipSecToHms = function(totalSec) {
+  const secNum = Number(totalSec);
+  if (!isFinite(secNum) || secNum < 0) return "";
+  const whole = Math.floor(secNum);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
+};
+
+window.validateSkipIntroPair = function(startRaw, endRaw) {
+  const sRaw = window.normalizeArabicDigits(startRaw).trim();
+  const eRaw = window.normalizeArabicDigits(endRaw).trim();
+  if (!sRaw && !eRaw) {
+    return { ok: true, empty: true, startStr: "", endStr: "", startSec: null, endSec: null };
+  }
+  if (!sRaw || !eRaw) {
+    return { ok: false, error: "يرجى إدخال وقت البداية ووقت النهاية معاً لتخطي المقدمة أو تركهما فارغين." };
+  }
+  const startSec = window.parseSkipTimeToSec(sRaw);
+  const endSec = window.parseSkipTimeToSec(eRaw);
+  if (startSec === null || startSec < 0 || endSec === null || endSec < 0) {
+    return { ok: false, error: "صيغة توقيت تخطي المقدمة غير صالحة. استخدم HH:MM:SS (مثال: 00:01:30) أو MM:SS (مثال: 01:30)." };
+  }
+  if (endSec <= startSec) {
+    return { ok: false, error: "يجب أن يكون وقت النهاية أكبر من وقت البداية في إعداد تخطي المقدمة." };
+  }
+  return {
+    ok: true,
+    empty: false,
+    startStr: window.formatSkipSecToHms(startSec),
+    endStr: window.formatSkipSecToHms(endSec),
+    startSec: startSec,
+    endSec: endSec
+  };
+};
+
+window.resolveEpisodeSkipIntroWindowMs = function(item, ep, idx) {
+  let rawStart = null;
+  let rawEnd = null;
+  const hasEpisodesList = Array.isArray(item && item.episodes) && item.episodes.length > 0;
+  if (ep && ((ep.skipIntroStart !== undefined && ep.skipIntroStart !== "") || (ep.skipIntroStartSec !== undefined && ep.skipIntroStartSec !== null))) {
+    rawStart = (ep.skipIntroStartSec !== undefined && ep.skipIntroStartSec !== null && ep.skipIntroStartSec !== "") ? ep.skipIntroStartSec : ep.skipIntroStart;
+    rawEnd = (ep.skipIntroEndSec !== undefined && ep.skipIntroEndSec !== null && ep.skipIntroEndSec !== "") ? ep.skipIntroEndSec : ep.skipIntroEnd;
+  } else if ((!hasEpisodesList || (item.episodes.length === 1 && idx === 0)) && item && ((item.skipIntroStart !== undefined && item.skipIntroStart !== "") || (item.skipIntroStartSec !== undefined && item.skipIntroStartSec !== null))) {
+    rawStart = (item.skipIntroStartSec !== undefined && item.skipIntroStartSec !== null && item.skipIntroStartSec !== "") ? item.skipIntroStartSec : item.skipIntroStart;
+    rawEnd = (item.skipIntroEndSec !== undefined && item.skipIntroEndSec !== null && item.skipIntroEndSec !== "") ? item.skipIntroEndSec : item.skipIntroEnd;
+  }
+  const sSec = window.parseSkipTimeToSec(rawStart === null || rawStart === undefined ? "" : String(rawStart));
+  const eSec = window.parseSkipTimeToSec(rawEnd === null || rawEnd === undefined ? "" : String(rawEnd));
+  if (sSec === null || eSec === null || sSec < 0 || eSec <= sSec) {
+    return { startMs: -1, endMs: -1, startLabel: "", endLabel: "" };
+  }
+  return {
+    startMs: Math.floor(sSec * 1000),
+    endMs: Math.floor(eSec * 1000),
+    startLabel: window.formatSkipSecToHms(sSec),
+    endLabel: window.formatSkipSecToHms(eSec)
+  };
+};
+
 // ================= Progressive Document Parsing & Ordering =================
 window.parseMovieDoc = function(d) {
   const data = d.data() || {};
@@ -12539,9 +12663,14 @@ window.proceedWithWatchEpisode=(fid,idx)=>{
 
   const resumeSec = (typeof window.getResumePositionSec === "function") ? window.getResumePositionSec(fid, idx) : 0;
   const resumeMs = Math.max(0, Math.floor(resumeSec * 1000));
+  const skipWindow = window.resolveEpisodeSkipIntroWindowMs(item, ep, idx);
 
   // 1. If video exists (M3U8, MP4, MKV, Pixeldrain API, etc.) -> play in native Media3 ExoPlayer
   if (videoLink) {
+    if (window.AndroidBridge && typeof window.AndroidBridge.playStreamWithFullContext === "function") {
+      window.AndroidBridge.playStreamWithFullContext(videoLink, streamTitle, fid, idx, resumeMs, skipWindow.startMs, skipWindow.endMs);
+      return;
+    }
     if (window.AndroidBridge && typeof window.AndroidBridge.playStreamWithContext === "function") {
       window.AndroidBridge.playStreamWithContext(videoLink, streamTitle, fid, idx, resumeMs);
       return;
@@ -12558,21 +12687,45 @@ window.proceedWithWatchEpisode=(fid,idx)=>{
       const globalTopBar = document.querySelector(".top-bar");
       if (globalTopBar) globalTopBar.style.display = "none";
       let v = `<video id="fallbackVideoPlayer" controls controlsList="nofullscreen" disablePictureInPicture playsinline autoplay preload="metadata" src="${videoLink}" style="width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;background:#000;transform:rotate(0deg);transition:transform 0.2s ease"></video>`;
-      main.innerHTML = `<style>#fallbackVideoPlayer::-webkit-media-controls-fullscreen-button{display:none!important;}</style><div id="fallbackWatchContainer" style="position:fixed;inset:0;background:#000;z-index:999;display:flex;flex-direction:column;overflow:hidden"><div class="page-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 16px;background:rgba(0,0,0,0.68);z-index:2;flex-shrink:0"><button class="back-btn" style="margin:0" onclick="goBack()">${t("back_btn")}</button><div style="flex:1;color:#fff;font-size:15px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0 8px">${streamTitle}</div><button id="fallbackRotateVideoBtn" type="button" onclick="window.toggleFallbackVideoDirection()" style="background:#1c1c1e;color:#fff;border:1px solid #444;padding:8px 14px;border-radius:20px;font-size:13px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:40px">🔄 <span id="fallbackRotateVideoLabel">اتجاه الفيديو</span></button><button type="button" onclick="window.exitFallbackWatchMode();openReportProblemModal('${fid}', ${idx})" style="background:#260a0a;color:#ff6b6b;border:1px solid #4a1515;padding:8px 14px;border-radius:20px;font-size:13px;font-weight:bold;cursor:pointer;min-height:40px">🚩 إبلاغ</button></div><div style="flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden">${v}</div></div>`;
+      let skipBtnHtml = `<button id="fallbackSkipIntroBtn" type="button" style="display:none;position:absolute;bottom:76px;right:20px;z-index:5;background:rgba(18,20,26,0.84);color:#fff;border:1.5px solid rgba(255,255,255,0.65);border-radius:26px;padding:10px 18px;min-height:48px;font-size:15px;font-weight:900;cursor:pointer;align-items:center;gap:8px;box-shadow:0 6px 20px rgba(0,0,0,0.55)">⏭️ <span>تخطي المقدمة</span></button>`;
+      main.innerHTML = `<style>#fallbackVideoPlayer::-webkit-media-controls-fullscreen-button{display:none!important;}</style><div id="fallbackWatchContainer" style="position:fixed;inset:0;background:#000;z-index:999;display:flex;flex-direction:column;overflow:hidden"><div class="page-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 16px;background:rgba(0,0,0,0.68);z-index:2;flex-shrink:0"><button class="back-btn" style="margin:0" onclick="goBack()">${t("back_btn")}</button><div style="flex:1;color:#fff;font-size:15px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0 8px">${streamTitle}</div><button id="fallbackRotateVideoBtn" type="button" onclick="window.toggleFallbackVideoDirection()" style="background:#1c1c1e;color:#fff;border:1px solid #444;padding:8px 14px;border-radius:20px;font-size:13px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:40px">🔄 <span id="fallbackRotateVideoLabel">اتجاه الفيديو</span></button><button type="button" onclick="window.exitFallbackWatchMode();openReportProblemModal('${fid}', ${idx})" style="background:#260a0a;color:#ff6b6b;border:1px solid #4a1515;padding:8px 14px;border-radius:20px;font-size:13px;font-weight:bold;cursor:pointer;min-height:40px">🚩 إبلاغ</button></div><div style="position:relative;flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden">${v}${skipBtnHtml}</div></div>`;
       window._lastDetailsFid = fid;
 
       let videoEl = document.getElementById("fallbackVideoPlayer");
+      let fallbackSkipBtn = document.getElementById("fallbackSkipIntroBtn");
       if (videoEl) {
         if (window.currentWatchingEpisode.htmlVideoInterval) {
           clearInterval(window.currentWatchingEpisode.htmlVideoInterval);
         }
         let hasSeekedInitial = false;
+        let hasSkippedFallback = false;
+        const refreshFallbackSkipBtn = () => {
+          if (!fallbackSkipBtn) return;
+          const posMs = Math.floor((videoEl.currentTime || 0) * 1000);
+          const valid = skipWindow.startMs >= 0 && skipWindow.endMs > skipWindow.startMs;
+          const show = !hasSkippedFallback && valid && posMs >= skipWindow.startMs && posMs < skipWindow.endMs;
+          fallbackSkipBtn.style.display = show ? "inline-flex" : "none";
+        };
+        if (fallbackSkipBtn) {
+          fallbackSkipBtn.addEventListener("click", () => {
+            if (skipWindow.endMs <= skipWindow.startMs) return;
+            hasSkippedFallback = true;
+            fallbackSkipBtn.style.display = "none";
+            try {
+              const targetSec = skipWindow.endMs / 1000;
+              videoEl.currentTime = (isFinite(videoEl.duration) && targetSec > videoEl.duration) ? videoEl.duration : targetSec;
+            } catch (_) {}
+          });
+        }
         videoEl.addEventListener("loadedmetadata", () => {
           if (!hasSeekedInitial && resumeSec >= 5 && isFinite(videoEl.duration) && resumeSec < videoEl.duration * 0.95) {
             hasSeekedInitial = true;
             try { videoEl.currentTime = resumeSec; } catch (_) {}
           }
+          refreshFallbackSkipBtn();
         });
+        videoEl.addEventListener("timeupdate", refreshFallbackSkipBtn);
+        videoEl.addEventListener("seeked", refreshFallbackSkipBtn);
         let tickSecs = 0;
         window.currentWatchingEpisode.htmlVideoInterval = setInterval(() => {
           if (videoEl && !videoEl.paused && !videoEl.ended && videoEl.readyState >= 2) {
@@ -12604,6 +12757,7 @@ window.proceedWithWatchEpisode=(fid,idx)=>{
           }
         });
         videoEl.addEventListener("ended", () => {
+          if (fallbackSkipBtn) fallbackSkipBtn.style.display = "none";
           if (window.currentWatchingEpisode.htmlVideoInterval) {
             clearInterval(window.currentWatchingEpisode.htmlVideoInterval);
             window.currentWatchingEpisode.htmlVideoInterval = null;
@@ -13396,7 +13550,7 @@ window.renderAddPage=(isBack=false)=>{
   <option value="مستمر">حالة العمل: مستمر (Ongoing)</option>
   <option value="مكتمل">حالة العمل: مكتمل (Completed)</option>
   <option value="لم يصدر بعد">حالة العمل: لم يصدر بعد (Upcoming)</option>
-</select><div class="drop-zone" onclick="document.getElementById('posterFile').click()">📷 اختر بوستر<input type="file" id="posterFile" accept="image/*" hidden onchange="handlePosterFile(this.files[0])"><div id="posterPreview" style="margin-top:8px;color:#fff;font-size:12px"></div></div><input id="addVideo" class="input" placeholder="رابط البث M3U8 أو MP4 أو Pixeldrain"><div style="display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 6px 0"><button type="button" onclick="fillSamplePixeldrain()" style="background:#1f1f1f;color:#00d2ff;border:1px solid #333;padding:8px 12px;border-radius:8px;font-size:12px;cursor:pointer">⚡ تجربة رابط Pixeldrain: cnR9Z51</button><button type="button" onclick="testPlayPixeldrain()" style="background:#00d2ff;color:#000;border:none;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer">▶ تشغيل مباشر لتجربة الرابط</button></div><input id="addAltUrl" class="input" placeholder="رابط الموقع البديل (اختياري) - أدخل رابط موقع القناة أو YouTube أو Google"><div class="drop-zone" onclick="document.getElementById('videoFile').click()">🎬 اختر ملف فيديو<input type="file" id="videoFile" accept="video/*" hidden onchange="handleVideoFile(this.files[0])"><div id="videoPreview" style="margin-top:8px;color:#fff;font-size:12px"></div></div><input id="addDesc" class="input" placeholder="وصف العمل / القصة"><button id="addBtn" onclick="addNewContent()" style="background:#e50914;color:#fff;border:none;padding:13px;border-radius:10px;font-weight:bold;cursor:pointer">إضافة العمل وإشعار المستخدمين</button></div>`;
+</select><div class="drop-zone" onclick="document.getElementById('posterFile').click()">📷 اختر بوستر<input type="file" id="posterFile" accept="image/*" hidden onchange="handlePosterFile(this.files[0])"><div id="posterPreview" style="margin-top:8px;color:#fff;font-size:12px"></div></div><input id="addVideo" class="input" placeholder="رابط البث M3U8 أو MP4 أو Pixeldrain"><div style="display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 6px 0"><button type="button" onclick="fillSamplePixeldrain()" style="background:#1f1f1f;color:#00d2ff;border:1px solid #333;padding:8px 12px;border-radius:8px;font-size:12px;cursor:pointer">⚡ تجربة رابط Pixeldrain: cnR9Z51</button><button type="button" onclick="testPlayPixeldrain()" style="background:#00d2ff;color:#000;border:none;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer">▶ تشغيل مباشر لتجربة الرابط</button></div><input id="addAltUrl" class="input" placeholder="رابط الموقع البديل (اختياري) - أدخل رابط موقع القناة أو YouTube أو Google"><div style="background:#0d131a;border:1px solid #1e3246;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px"><label style="font-size:12px;font-weight:bold;color:#38bdf8">⏭️ تخطي المقدمة للحلقة الأولى / الفيلم (اختياري):</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><input id="addSkipIntroStart" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="وقت البداية (00:01:30)"><input id="addSkipIntroEnd" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="وقت النهاية (00:03:15)"></div></div><div class="drop-zone" onclick="document.getElementById('videoFile').click()">🎬 اختر ملف فيديو<input type="file" id="videoFile" accept="video/*" hidden onchange="handleVideoFile(this.files[0])"><div id="videoPreview" style="margin-top:8px;color:#fff;font-size:12px"></div></div><input id="addDesc" class="input" placeholder="وصف العمل / القصة"><button id="addBtn" onclick="addNewContent()" style="background:#e50914;color:#fff;border:none;padding:13px;border-radius:10px;font-weight:bold;cursor:pointer">إضافة العمل وإشعار المستخدمين</button></div>`;
   window.renderAddGenresPillsGrid();
 };
 window.handlePosterFile=(f)=>{if(!f)return;let r=new FileReader();r.onload=e=>{window.tempPosterData=e.target.result;document.getElementById("posterPreview").innerText="✅ "+f.name;};r.readAsDataURL(f);};
@@ -13447,10 +13601,52 @@ window.addNewContent=async()=>{
     window.addTempAltTitle();
   }
   let alternativeTitles = (window.tempAltTitles || []).map(x => String(x || "").trim()).filter(Boolean);
+  const skipCheck = window.validateSkipIntroPair(
+    document.getElementById("addSkipIntroStart")?.value || "",
+    document.getElementById("addSkipIntroEnd")?.value || ""
+  );
+  if (!skipCheck.ok) {
+    alert(skipCheck.error);
+    return;
+  }
+
+  let firstEpisodeObj = { title: "الحلقة 1", video, altUrl };
+  if (!skipCheck.empty) {
+    firstEpisodeObj.skipIntroStart = skipCheck.startStr;
+    firstEpisodeObj.skipIntroEnd = skipCheck.endStr;
+    firstEpisodeObj.skipIntroStartSec = skipCheck.startSec;
+    firstEpisodeObj.skipIntroEndSec = skipCheck.endSec;
+  }
+  const addPayload = {
+    id: type + "-" + Date.now(),
+    title,
+    alternativeTitles,
+    year: parseInt(year),
+    type,
+    category,
+    workType,
+    version: version,
+    genres: selectedGenres,
+    description: desc,
+    poster,
+    banner: banner,
+    trailerUrl: trailerUrl,
+    status: status,
+    video: video,
+    altUrl: altUrl,
+    episodes: [firstEpisodeObj],
+    createdAt: serverTimestamp()
+  };
+  if (!skipCheck.empty) {
+    addPayload.skipIntroStart = skipCheck.startStr;
+    addPayload.skipIntroEnd = skipCheck.endStr;
+    addPayload.skipIntroStartSec = skipCheck.startSec;
+    addPayload.skipIntroEndSec = skipCheck.endSec;
+  }
 
   let btn=document.getElementById("addBtn");btn.disabled=true;btn.innerText="⏳ جاري الإضافة وإرسال الإشعار...";
   try{
-    const newDocRef = await addDoc(colRef,{id:type+"-"+Date.now(),title,alternativeTitles,year:parseInt(year),type,category,workType,version:version,genres:selectedGenres,description:desc,poster,banner:banner,trailerUrl:trailerUrl,status:status,video:video,altUrl:altUrl,episodes:[{title:"الحلقة 1",video,altUrl}],createdAt:serverTimestamp()});
+    const newDocRef = await addDoc(colRef, addPayload);
     try {
       await window.broadcastNotificationToAllDevices({
         title: "تمت إضافة حلقة جديدة!",
@@ -13484,20 +13680,29 @@ window.renderAddEpisodeForm=(fid)=>{
     <div style="padding:12px;background:#111;margin:8px;border-radius:10px;border:1px solid #222">
       <div style="font-weight:bold;font-size:14px;color:#aaa;margin-bottom:8px">الحلقات الحالية (${episodes.length}):</div>
       <div style="display:flex;flex-direction:column;gap:6px">
-        ${episodes.map((ep, idx) => `
-          <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1a1a;padding:8px 12px;border-radius:8px;border:1px solid #333">
-            <span style="font-size:14px;color:#fff">${ep.title || "حلقة " + (idx + 1)}</span>
-            <div style="display:flex;gap:6px">
+        ${episodes.map((ep, idx) => {
+          const epSkip = window.resolveEpisodeSkipIntroWindowMs(item, ep, idx);
+          const skipBadge = (epSkip.startMs >= 0 && epSkip.endMs > epSkip.startMs)
+            ? `<span style="display:inline-block;margin-right:6px;background:#0d2818;color:#4ade80;border:1px solid #1e4d30;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:bold" dir="ltr">⏭️ ${epSkip.startLabel} → ${epSkip.endLabel}</span>`
+            : "";
+          return `
+          <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1a1a;padding:8px 12px;border-radius:8px;border:1px solid #333;gap:8px">
+            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+              <span style="font-size:14px;color:#fff">${ep.title || "حلقة " + (idx + 1)}</span>
+              ${skipBadge}
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
               <button type="button" onclick="openEditEpisodeModal('${item.firebaseId}', ${idx})" style="background:#00d2ff;color:#000;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:bold">✏️ تعديل الرابط</button>
               <button type="button" onclick="deleteEpisode('${item.firebaseId}', ${idx})" style="background:#e50914;color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:bold">🗑️ حذف</button>
             </div>
           </div>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
     </div>
   ` : "";
   main.innerHTML=`<div class="page-header"><button class="back-btn" onclick="goBack()">← رجوع</button></div><div style="padding:15px;text-align:center"><img class="poster" data-poster-fid="${item.firebaseId}" src="${item.poster}" style="width:140px;height:140px;object-fit:contain;background:#1a1a1a;padding:10px;border-radius:18px;border:1px solid #222"><div style="margin-top:10px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap"><button type="button" onclick="openEditPosterModal('${item.firebaseId}')" style="background:#1a2a3a;color:#00d2ff;border:1px solid #2a4a6a;padding:8px 14px;border-radius:10px;font-size:13px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:6px">🖼️ تعديل البوستر</button><button type="button" onclick="openTestNotificationModal('${item.firebaseId}')" style="background:#0d2818;color:#4ade80;border:1px solid #1e4d30;padding:8px 14px;border-radius:10px;font-size:13px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:6px">🔔 إرسال إشعار لهذا العمل</button></div><h2 style="margin-top:8px">${item.title}</h2>${window.renderDescriptionHtml(item.firebaseId)}</div>${epListHtml}<div style="padding:12px;display:flex;flex-direction:column;gap:10px;background:#111;margin:8px;border-radius:10px;border:1px solid #222"><h3 style="font-size:15px;margin-bottom:2px">➕ إضافة حلقة / بث جديد (يرسل إشعار تلقائي للجميع 🔔)</h3><input id="epTitle" class="input" placeholder="اسم أو رقم الحلقة (مثال: الحلقة ${episodes.length + 1})"><input id="epVideoLink" class="input" placeholder="رابط البث M3U8 أو MP4 أو Pixeldrain"><div style="display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 6px 0"><button type="button" onclick="document.getElementById('epVideoLink').value='https://pixeldrain.com/api/file/cnR9Z51'" style="background:#1f1f1f;color:#00d2ff;border:1px solid #333;padding:8px 12px;border-radius:8px;font-size:12px;cursor:pointer">⚡ تعبئة رابط Pixeldrain التجريبي (cnR9Z51)</button></div><input id="epAltUrl" class="input" placeholder="رابط الموقع البديل (اختياري) - أدخل رابط موقع القناة أو YouTube أو Google">
-<input id="epAltTitles" class="input" placeholder="الأسماء البديلة للحلقة للبحث (اختياري - مفصولة بفواصل)"><div class="drop-zone" onclick="document.getElementById('epVideoFile').click()">🎬 اختر فيديو<input type="file" id="epVideoFile" accept="video/*" hidden onchange="handleEpVideoFile(this.files[0])"><div id="epVideoPreview" style="margin-top:8px;color:#fff;font-size:12px"></div></div><button id="addEpSubmitBtn" onclick="addEpisode('${item.firebaseId}')" style="background:#fff;color:#000;border:none;padding:12px;border-radius:8px;font-weight:bold;cursor:pointer">✅ إضافة الحلقة وإرسال إشعار للمستخدمين</button></div>`;
+<input id="epAltTitles" class="input" placeholder="الأسماء البديلة للحلقة للبحث (اختياري - مفصولة بفواصل)"><div style="background:#0d131a;border:1px solid #1e3246;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px"><label style="font-size:12px;font-weight:bold;color:#38bdf8">⏭️ توقيت تخطي المقدمة لهذه الحلقة (اختياري):</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><input id="epSkipIntroStart" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="البداية (00:01:30)"><input id="epSkipIntroEnd" class="input" dir="ltr" style="margin:0;text-align:center" placeholder="النهاية (00:03:15)"></div><span style="font-size:11px;color:#64748b">كل حلقة تمتلك توقيتاً مستقلاً — اترك الحقلين فارغين إذا لم يكن للحلقة مقدمة.</span></div><div class="drop-zone" onclick="document.getElementById('epVideoFile').click()">🎬 اختر فيديو<input type="file" id="epVideoFile" accept="video/*" hidden onchange="handleEpVideoFile(this.files[0])"><div id="epVideoPreview" style="margin-top:8px;color:#fff;font-size:12px"></div></div><button id="addEpSubmitBtn" onclick="addEpisode('${item.firebaseId}')" style="background:#fff;color:#000;border:none;padding:12px;border-radius:8px;font-weight:bold;cursor:pointer">✅ إضافة الحلقة وإرسال إشعار للمستخدمين</button></div>`;
 };
 window.handleEpVideoFile=(f)=>{if(!f)return;let r=new FileReader();r.onload=e=>{window.tempVideoData=e.target.result;document.getElementById("epVideoPreview").innerText="✅ "+f.name;};r.readAsDataURL(f);};
 window.addEpisode=async(fid)=>{
@@ -13514,11 +13719,29 @@ window.addEpisode=async(fid)=>{
     alert("يرجى إدخال رابط الفيديو أو رابط الموقع البديل");
     return;
   }
+  const skipCheck = window.validateSkipIntroPair(
+    document.getElementById("epSkipIntroStart")?.value || "",
+    document.getElementById("epSkipIntroEnd")?.value || ""
+  );
+  if (!skipCheck.ok) {
+    alert(skipCheck.error);
+    return;
+  }
   let item=getItemByFirebaseId(fid);
   if(!item)return;
   let epAlts = (document.getElementById("epAltTitles") ? document.getElementById("epAltTitles").value.trim() : "").split(/[,،\n]+/).map(s => s.trim()).filter(Boolean);
   let baseEpisodes = Array.isArray(item.episodes) ? item.episodes : (item.video || item.altUrl ? [{ title: "البث المباشر", video: item.video || "", altUrl: item.altUrl || "" }] : []);
-  let ne=[...baseEpisodes,{title:t,video:l,altUrl:alt,alternativeTitles:epAlts}];
+  let newEpObj = {
+    title: t,
+    video: l,
+    altUrl: alt,
+    alternativeTitles: epAlts,
+    skipIntroStart: skipCheck.empty ? "" : skipCheck.startStr,
+    skipIntroEnd: skipCheck.empty ? "" : skipCheck.endStr,
+    skipIntroStartSec: skipCheck.empty ? null : skipCheck.startSec,
+    skipIntroEndSec: skipCheck.empty ? null : skipCheck.endSec
+  };
+  let ne=[...baseEpisodes, newEpObj];
   let newEpIndexOneBased = ne.length;
   let digitsMatch = t.match(/\d+/);
   let resolvedEpNumber = digitsMatch ? digitsMatch[0] : String(newEpIndexOneBased);
@@ -15212,8 +15435,21 @@ window.openEditEpisodeModal = function(fid, idx) {
     epAltsEl.value = Array.isArray(ep.alternativeTitles) ? ep.alternativeTitles.join(", ") : (ep.alternativeTitles || "");
   }
 
+  const skipWindow = window.resolveEpisodeSkipIntroWindowMs(item, ep, idx);
+  const skipStartEl = document.getElementById("editEpSkipStartInput");
+  const skipEndEl = document.getElementById("editEpSkipEndInput");
+  if (skipStartEl) skipStartEl.value = skipWindow.startLabel || "";
+  if (skipEndEl) skipEndEl.value = skipWindow.endLabel || "";
+
   const modal = document.getElementById("editEpisodeModal");
   if (modal) modal.style.display = "flex";
+};
+
+window.clearEditEpSkipIntro = function() {
+  const s = document.getElementById("editEpSkipStartInput");
+  const e = document.getElementById("editEpSkipEndInput");
+  if (s) s.value = "";
+  if (e) e.value = "";
 };
 
 window.closeEditEpisodeModal = function() {
@@ -15254,6 +15490,15 @@ window.saveEditedEpisode = async function() {
     return;
   }
 
+  const skipCheck = window.validateSkipIntroPair(
+    document.getElementById("editEpSkipStartInput")?.value || "",
+    document.getElementById("editEpSkipEndInput")?.value || ""
+  );
+  if (!skipCheck.ok) {
+    alert(skipCheck.error);
+    return;
+  }
+
   video = window.normalizeVideoUrl(video);
   if (altUrl && !altUrl.startsWith("http://") && !altUrl.startsWith("https://")) {
     altUrl = "https://" + altUrl;
@@ -15264,10 +15509,15 @@ window.saveEditedEpisode = async function() {
 
   let epAltsClean = (document.getElementById("editEpAltTitlesInput") ? document.getElementById("editEpAltTitlesInput").value.trim() : "").split(/[,،\n]+/).map(s => s.trim()).filter(Boolean);
   episodes[idx] = {
+    ...(episodes[idx] || {}),
     title: title,
     video: video,
     altUrl: altUrl,
-    alternativeTitles: epAltsClean
+    alternativeTitles: epAltsClean,
+    skipIntroStart: skipCheck.empty ? "" : skipCheck.startStr,
+    skipIntroEnd: skipCheck.empty ? "" : skipCheck.endStr,
+    skipIntroStartSec: skipCheck.empty ? null : skipCheck.startSec,
+    skipIntroEndSec: skipCheck.empty ? null : skipCheck.endSec
   };
 
   let btn = document.getElementById("saveEditEpBtn");
@@ -15281,14 +15531,26 @@ window.saveEditedEpisode = async function() {
     if (idx === 0) {
       updatePayload.video = video;
       updatePayload.altUrl = altUrl;
+      if (episodes.length === 1) {
+        updatePayload.skipIntroStart = skipCheck.empty ? "" : skipCheck.startStr;
+        updatePayload.skipIntroEnd = skipCheck.empty ? "" : skipCheck.endStr;
+        updatePayload.skipIntroStartSec = skipCheck.empty ? null : skipCheck.startSec;
+        updatePayload.skipIntroEndSec = skipCheck.empty ? null : skipCheck.endSec;
+      }
     }
     await updateDoc(doc(db, "movies", fid), updatePayload);
     item.episodes = episodes;
     if (idx === 0) {
       item.video = video;
       item.altUrl = altUrl;
+      if (episodes.length === 1) {
+        item.skipIntroStart = updatePayload.skipIntroStart;
+        item.skipIntroEnd = updatePayload.skipIntroEnd;
+        item.skipIntroStartSec = updatePayload.skipIntroStartSec;
+        item.skipIntroEndSec = updatePayload.skipIntroEndSec;
+      }
     }
-    alert("✅ تم تعديل رابط البث للحلقة بنجاح!");
+    alert("✅ تم تعديل الحلقة وحفظ توقيت تخطي المقدمة بنجاح!");
     closeEditEpisodeModal();
     if (currentPage === "details") {
       renderEpisodesList(fid);
@@ -17416,6 +17678,19 @@ window.openEditContentModal = function(fid) {
   const trailerInput = document.getElementById("editContentTrailerInput"); if (trailerInput) trailerInput.value = item.trailerUrl || item.trailer || "";
   const statusSelect = document.getElementById("editContentStatusSelect");  if (statusSelect) statusSelect.value = item.status || (item.category === "فيلم" || item.category === "فلم" ? "مكتمل" : "مستمر");
 
+  const skipSecBox = document.getElementById("editContentSkipIntroSection");
+  const skipStartIn = document.getElementById("editContentSkipStartInput");
+  const skipEndIn = document.getElementById("editContentSkipEndInput");
+  const epCount = Array.isArray(item.episodes) ? item.episodes.length : 0;
+  const showSingleSkipBox = epCount <= 1 || item.workType === "movie" || item.category === "فيلم" || item.category === "فلم";
+  if (skipSecBox) skipSecBox.style.display = showSingleSkipBox ? "flex" : "none";
+  if (skipStartIn && skipEndIn) {
+    const firstEp = epCount >= 1 ? item.episodes[0] : null;
+    const resolved = window.resolveEpisodeSkipIntroWindowMs(item, firstEp, 0);
+    skipStartIn.value = resolved.startLabel || "";
+    skipEndIn.value = resolved.endLabel || "";
+  }
+
   const statusMsg = document.getElementById("editContentStatusMsg");
   if (statusMsg) statusMsg.innerHTML = "";
 
@@ -17545,6 +17820,20 @@ window.saveContentFromModal = async function() {
   const newStatus = (document.getElementById("editContentStatusSelect")?.value || item.status || "مستمر").trim();
   const cleanGenres = [...(window.editModalSelectedGenres || [])];
 
+  const skipSecBox = document.getElementById("editContentSkipIntroSection");
+  const isEditingSingleSkip = skipSecBox && skipSecBox.style.display !== "none";
+  let skipCheck = null;
+  if (isEditingSingleSkip) {
+    skipCheck = window.validateSkipIntroPair(
+      document.getElementById("editContentSkipStartInput")?.value || "",
+      document.getElementById("editContentSkipEndInput")?.value || ""
+    );
+    if (!skipCheck.ok) {
+      alert(skipCheck.error);
+      return;
+    }
+  }
+
   const saveBtn = document.getElementById("saveEditContentBtn");
   const statusMsg = document.getElementById("editContentStatusMsg");
   if (saveBtn) {
@@ -17554,7 +17843,7 @@ window.saveContentFromModal = async function() {
   if (statusMsg) statusMsg.innerHTML = '<span style="color:#00d2ff">⏳ جاري الحفظ في قاعدة البيانات...</span>';
 
   try {
-    await updateDoc(doc(db, "movies", fid), {
+    const contentUpdatePayload = {
       title: newTitle,
       alternativeTitles: cleanAlts,
       category: newCategory,
@@ -17566,8 +17855,26 @@ window.saveContentFromModal = async function() {
       banner: newBanner,
       trailerUrl: newTrailer,
       status: newStatus,
-            poster: item.poster || "https://images.unsplash.com/photo-1536240478700-b869070f9279?w=400"
-    });
+      poster: item.poster || "https://images.unsplash.com/photo-1536240478700-b869070f9279?w=400"
+    };
+    if (isEditingSingleSkip && skipCheck) {
+      contentUpdatePayload.skipIntroStart = skipCheck.empty ? "" : skipCheck.startStr;
+      contentUpdatePayload.skipIntroEnd = skipCheck.empty ? "" : skipCheck.endStr;
+      contentUpdatePayload.skipIntroStartSec = skipCheck.empty ? null : skipCheck.startSec;
+      contentUpdatePayload.skipIntroEndSec = skipCheck.empty ? null : skipCheck.endSec;
+      if (Array.isArray(item.episodes) && item.episodes.length >= 1) {
+        const updatedEps = [...item.episodes];
+        updatedEps[0] = {
+          ...(updatedEps[0] || {}),
+          skipIntroStart: contentUpdatePayload.skipIntroStart,
+          skipIntroEnd: contentUpdatePayload.skipIntroEnd,
+          skipIntroStartSec: contentUpdatePayload.skipIntroStartSec,
+          skipIntroEndSec: contentUpdatePayload.skipIntroEndSec
+        };
+        contentUpdatePayload.episodes = updatedEps;
+      }
+    }
+    await updateDoc(doc(db, "movies", fid), contentUpdatePayload);
 
     item.title = newTitle;
     item.alternativeTitles = cleanAlts;
@@ -17580,6 +17887,15 @@ window.saveContentFromModal = async function() {
     item.banner = newBanner;
     item.trailerUrl = newTrailer;
     item.status = newStatus;
+    if (isEditingSingleSkip && skipCheck) {
+      item.skipIntroStart = contentUpdatePayload.skipIntroStart;
+      item.skipIntroEnd = contentUpdatePayload.skipIntroEnd;
+      item.skipIntroStartSec = contentUpdatePayload.skipIntroStartSec;
+      item.skipIntroEndSec = contentUpdatePayload.skipIntroEndSec;
+      if (contentUpdatePayload.episodes) {
+        item.episodes = contentUpdatePayload.episodes;
+      }
+    }
 
     if (statusMsg) statusMsg.innerHTML = '<span style="color:#4ade80">✅ تم حفظ جميع التعديلات والتصنيفات بنجاح!</span>';
     setTimeout(() => {

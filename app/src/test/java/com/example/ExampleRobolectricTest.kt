@@ -695,8 +695,78 @@ class ExampleRobolectricTest {
 
         controller.pause().stop().destroy()
     }
+
+    @OptIn(UnstableApi::class)
+    @Test
+    fun testPerEpisodeSkipIntroPlayerAndAdminIntegration() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val html = context.assets.open("index.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+        // 1. Admin UI inputs for per-episode & movie Skip Intro
+        assertTrue("Edit Episode modal must include skip start and end inputs",
+            html.contains("""id="editEpSkipStartInput"""") && html.contains("""id="editEpSkipEndInput"""")
+        )
+        assertTrue("Add Episode form must include per-episode skip start and end inputs",
+            html.contains("""id="epSkipIntroStart"""") && html.contains("""id="epSkipIntroEnd"""")
+        )
+        assertTrue("Add Content form must include optional skip start and end inputs",
+            html.contains("""id="addSkipIntroStart"""") && html.contains("""id="addSkipIntroEnd"""")
+        )
+        assertTrue("Per-episode resolver and validator must exist in index.html",
+            html.contains("window.validateSkipIntroPair") &&
+            html.contains("window.resolveEpisodeSkipIntroWindowMs") &&
+            html.contains("window.AndroidBridge.playStreamWithFullContext")
+        )
+        assertTrue("Fallback web player must also support Skip Intro label",
+            html.contains("""id="fallbackSkipIntroBtn"""") && html.contains("تخطي المقدمة")
+        )
+
+        // 2. Native ExoPlayer Skip Intro overlay & session state behavior
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val skipBtn = activity.playerContainer.findViewWithTag<View>("player_skip_intro_button")
+        assertNotNull("Skip Intro button view must be mounted inside playerContainer", skipBtn)
+        assertEquals("Skip Intro button must be GONE initially", View.GONE, skipBtn.visibility)
+        assertEquals("Skip Intro contentDescription must match Arabic label", "تخطي المقدمة", skipBtn.contentDescription)
+
+        // Play Episode 1 with 01:20 (80s) -> 03:10 (190s)
+        activity.playStream(
+            rawUrl = "https://example.com/ep1.mp4",
+            title = "الحلقة 1",
+            fid = "anime_1",
+            idx = 0,
+            resumePositionMs = 0L,
+            skipIntroStartMs = 80_000L,
+            skipIntroEndMs = 190_000L
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(80_000L, activity.currentSkipIntroStartMs)
+        assertEquals(190_000L, activity.currentSkipIntroEndMs)
+        assertFalse(activity.hasSkippedIntroInSession)
+        assertEquals("Button must stay hidden before 01:20", View.GONE, skipBtn.visibility)
+
+        // Performing skip marks session done and hides button immediately
+        activity.performSkipIntroAction()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("Skip must lock session flag so button does not reappear", activity.hasSkippedIntroInSession)
+        assertEquals("Button must hide immediately after skip click", View.GONE, skipBtn.visibility)
+
+        // Play Episode 2 without Skip Intro timing -> clears window cleanly
+        activity.playStream(
+            rawUrl = "https://example.com/ep2.mp4",
+            title = "الحلقة 2",
+            fid = "anime_1",
+            idx = 1,
+            resumePositionMs = 0L
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(-1L, activity.currentSkipIntroStartMs)
+        assertEquals(-1L, activity.currentSkipIntroEndMs)
+        assertFalse(activity.hasSkippedIntroInSession)
+        assertEquals("Episode without timing must keep Skip Intro hidden", View.GONE, skipBtn.visibility)
+
+        controller.pause().stop().destroy()
+    }
 }
-
-
-
-

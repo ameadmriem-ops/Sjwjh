@@ -366,6 +366,9 @@ class MainActivity : ComponentActivity() {
         private const val STATE_BUNDLE_WATCH_IDX = "player_watch_idx"
         private const val STATE_BUNDLE_PLAYER_POS_MS = "player_pos_ms"
         private const val STATE_BUNDLE_PLAYER_ROTATED = "player_rotated_180"
+        private const val STATE_BUNDLE_SKIP_START_MS = "player_skip_intro_start_ms"
+        private const val STATE_BUNDLE_SKIP_END_MS = "player_skip_intro_end_ms"
+        private const val STATE_BUNDLE_SKIP_DONE = "player_skip_intro_done"
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1002
         private const val STORAGE_PERMISSION_REQUEST_CODE = 1003
 
@@ -379,6 +382,21 @@ class MainActivity : ComponentActivity() {
             if (resumePosMs < 5000L) return false
             if (durationMs > 0L && resumePosMs >= (durationMs * 0.95).toLong()) return false
             return true
+        }
+
+        internal fun isValidSkipIntroWindow(startMs: Long, endMs: Long): Boolean {
+            return startMs >= 0L && endMs > startMs
+        }
+
+        internal fun shouldShowSkipIntroButton(
+            posMs: Long,
+            startMs: Long,
+            endMs: Long,
+            hasSkippedInSession: Boolean
+        ): Boolean {
+            if (hasSkippedInSession) return false
+            if (!isValidSkipIntroWindow(startMs, endMs)) return false
+            return posMs >= startMs && posMs < endMs
         }
 
         internal fun normalizeStreamUrl(rawUrl: String): String {
@@ -498,6 +516,12 @@ class MainActivity : ComponentActivity() {
     @Volatile private var hasAppliedPendingSeek: Boolean = false
     private var lastProgressSaveAtMs: Long = 0L
     private var lastSavedProgressSec: Int = -1
+
+    // Per-episode Skip Intro overlay & session state
+    internal lateinit var skipIntroButton: LinearLayout
+    @Volatile internal var currentSkipIntroStartMs: Long = -1L
+    @Volatile internal var currentSkipIntroEndMs: Long = -1L
+    @Volatile internal var hasSkippedIntroInSession: Boolean = false
 
     // Async RAM caches to eliminate synchronous disk I/O on UI / WebView binder threads
     private val downloadedEpisodesCache = ConcurrentHashMap<String, String>()
@@ -635,6 +659,7 @@ class MainActivity : ComponentActivity() {
             override fun run() {
                 if (exoPlayer?.isPlaying == true) {
                     dispatchPlaybackTick(1)
+                    updateSkipIntroButtonVisibility()
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastProgressSaveAtMs >= 5000L) {
                         lastProgressSaveAtMs = now
@@ -763,8 +788,20 @@ class MainActivity : ComponentActivity() {
                 val savedIdx = state.getInt(STATE_BUNDLE_WATCH_IDX, -1)
                 val savedPosMs = state.getLong(STATE_BUNDLE_PLAYER_POS_MS, 0L)
                 val savedRot = state.getBoolean(STATE_BUNDLE_PLAYER_ROTATED, false)
+                val savedSkipStartMs = state.getLong(STATE_BUNDLE_SKIP_START_MS, -1L)
+                val savedSkipEndMs = state.getLong(STATE_BUNDLE_SKIP_END_MS, -1L)
+                val savedSkipDone = state.getBoolean(STATE_BUNDLE_SKIP_DONE, false)
                 isVideoRotated180 = savedRot
-                playStream(savedUrl, savedTitle, savedFid, savedIdx, savedPosMs)
+                playStream(
+                    rawUrl = savedUrl,
+                    title = savedTitle,
+                    fid = savedFid,
+                    idx = savedIdx,
+                    resumePositionMs = savedPosMs,
+                    skipIntroStartMs = savedSkipStartMs,
+                    skipIntroEndMs = savedSkipEndMs,
+                    initialHasSkippedIntro = savedSkipDone
+                )
             }
             pendingRestoredPlayerState = null
         }
@@ -807,6 +844,9 @@ class MainActivity : ComponentActivity() {
             outState.putInt(STATE_BUNDLE_WATCH_IDX, currentWatchIdx)
             outState.putLong(STATE_BUNDLE_PLAYER_POS_MS, (exoPlayer?.currentPosition ?: 0L).coerceAtLeast(0L))
             outState.putBoolean(STATE_BUNDLE_PLAYER_ROTATED, isVideoRotated180)
+            outState.putLong(STATE_BUNDLE_SKIP_START_MS, currentSkipIntroStartMs)
+            outState.putLong(STATE_BUNDLE_SKIP_END_MS, currentSkipIntroEndMs)
+            outState.putBoolean(STATE_BUNDLE_SKIP_DONE, hasSkippedIntroInSession)
         }
         super.onSaveInstanceState(outState)
     }
@@ -1255,6 +1295,7 @@ class MainActivity : ComponentActivity() {
             controllerHideOnTouch = true
             setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                 playerTopBar.visibility = visibility
+                updateSkipIntroButtonPositionForController(visibility == View.VISIBLE)
             })
             // Explicitly hide Media3's legacy portrait/landscape fullscreen toggle buttons
             findViewById<View>(androidx.media3.ui.R.id.exo_fullscreen)?.visibility = View.GONE
@@ -1544,6 +1585,81 @@ class MainActivity : ComponentActivity() {
 
         playerContainer.addView(playerTopBar)
 
+        // Sleek streaming-platform Skip Intro button overlay (independent per episode)
+        skipIntroButton = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val padHorizontal = (18 * density).toInt()
+            val padVertical = (11 * density).toInt()
+            setPadding(padHorizontal, padVertical, padHorizontal, padVertical)
+            minimumHeight = (48 * density).toInt()
+
+            val normalBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 26 * density
+                setColor(Color.parseColor("#CC12141A"))
+                setStroke((1.5f * density).toInt(), Color.parseColor("#88FFFFFF"))
+            }
+            val focusedOrPressedBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 26 * density
+                setColor(Color.parseColor("#E61E222D"))
+                setStroke((2 * density).toInt(), Color.WHITE)
+            }
+            val stateList = StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_pressed), focusedOrPressedBg)
+                addState(intArrayOf(android.R.attr.state_focused), focusedOrPressedBg)
+                addState(intArrayOf(), normalBg)
+            }
+            background = RippleDrawable(ColorStateList.valueOf(Color.parseColor("#44FFFFFF")), stateList, null)
+            elevation = 8 * density
+            isClickable = true
+            isFocusable = true
+            tag = "player_skip_intro_button"
+            contentDescription = "تخطي المقدمة"
+            visibility = View.GONE
+
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                marginEnd = (20 * density).toInt()
+                bottomMargin = (32 * density).toInt()
+            }
+
+            val skipIcon = android.widget.ImageView(this@MainActivity).apply {
+                val iconSize = (20 * density).toInt()
+                layoutParams = LinearLayout.LayoutParams(iconSize, iconSize).apply {
+                    marginEnd = (8 * density).toInt()
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                setImageResource(R.drawable.ic_skip_intro)
+                contentDescription = null
+            }
+            addView(skipIcon)
+
+            val skipLabel = TextView(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                text = "تخطي المقدمة"
+                setTextColor(Color.WHITE)
+                textSize = 15f
+                typeface = Typeface.DEFAULT_BOLD
+                includeFontPadding = false
+            }
+            addView(skipLabel)
+
+            setOnClickListener {
+                performSkipIntroAction()
+            }
+        }
+        playerContainer.addView(skipIntroButton)
+
         // Buffering ProgressBar
         playerProgressBar = ProgressBar(this).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -1605,7 +1721,16 @@ class MainActivity : ComponentActivity() {
             setOnClickListener {
                 currentStreamUrl?.let { url ->
                     val resumeAt = (exoPlayer?.currentPosition ?: 0L).coerceAtLeast(pendingResumePositionMs)
-                    playStream(url, currentStreamTitle ?: "", currentWatchFid, currentWatchIdx, resumeAt)
+                    playStream(
+                        rawUrl = url,
+                        title = currentStreamTitle ?: "",
+                        fid = currentWatchFid,
+                        idx = currentWatchIdx,
+                        resumePositionMs = resumeAt,
+                        skipIntroStartMs = currentSkipIntroStartMs,
+                        skipIntroEndMs = currentSkipIntroEndMs,
+                        initialHasSkippedIntro = hasSkippedIntroInSession
+                    )
                 }
             }
         }
@@ -1650,6 +1775,58 @@ class MainActivity : ComponentActivity() {
         playerContainer.addView(playerErrorContainer)
     }
 
+    internal fun updateSkipIntroButtonPositionForController(isControllerVisible: Boolean) {
+        if (!::skipIntroButton.isInitialized) return
+        val density = resources.displayMetrics.density
+        val lp = skipIntroButton.layoutParams as? FrameLayout.LayoutParams ?: return
+        val desiredBottomMargin = if (isControllerVisible) (96 * density).toInt() else (32 * density).toInt()
+        if (lp.bottomMargin != desiredBottomMargin) {
+            lp.bottomMargin = desiredBottomMargin
+            skipIntroButton.layoutParams = lp
+        }
+    }
+
+    internal fun updateSkipIntroButtonVisibility() {
+        if (!::skipIntroButton.isInitialized) return
+        val player = exoPlayer
+        val posMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        val shouldShow = ::playerContainer.isInitialized &&
+            playerContainer.visibility == View.VISIBLE &&
+            playerErrorContainer.visibility != View.VISIBLE &&
+            player != null &&
+            shouldShowSkipIntroButton(
+                posMs = posMs,
+                startMs = currentSkipIntroStartMs,
+                endMs = currentSkipIntroEndMs,
+                hasSkippedInSession = hasSkippedIntroInSession
+            )
+        val targetVis = if (shouldShow) View.VISIBLE else View.GONE
+        if (skipIntroButton.visibility != targetVis) {
+            skipIntroButton.visibility = targetVis
+        }
+    }
+
+    internal fun performSkipIntroAction() {
+        val player = exoPlayer ?: return
+        if (!isValidSkipIntroWindow(currentSkipIntroStartMs, currentSkipIntroEndMs)) {
+            if (::skipIntroButton.isInitialized) skipIntroButton.visibility = View.GONE
+            return
+        }
+        val durRaw = player.duration
+        val targetMs = if (durRaw != androidx.media3.common.C.TIME_UNSET && durRaw > 0L) {
+            currentSkipIntroEndMs.coerceAtMost(durRaw)
+        } else {
+            currentSkipIntroEndMs
+        }
+        hasSkippedIntroInSession = true
+        if (::skipIntroButton.isInitialized) {
+            skipIntroButton.visibility = View.GONE
+        }
+        player.seekTo(targetMs)
+        flushPlaybackProgressNow("skip_intro")
+        Log.d(TAG, "ExoPlayer: Skip Intro -> sought to ${targetMs}ms (locked for current watch session)")
+    }
+
     @JvmOverloads
     @OptIn(UnstableApi::class)
     fun playStream(
@@ -1657,7 +1834,10 @@ class MainActivity : ComponentActivity() {
         title: String,
         fid: String? = null,
         idx: Int = -1,
-        resumePositionMs: Long = 0L
+        resumePositionMs: Long = 0L,
+        skipIntroStartMs: Long = -1L,
+        skipIntroEndMs: Long = -1L,
+        initialHasSkippedIntro: Boolean = false
     ) {
         val streamUrl = normalizeStreamUrl(rawUrl)
         if (streamUrl.isBlank()) {
@@ -1674,8 +1854,20 @@ class MainActivity : ComponentActivity() {
         hasAppliedPendingSeek = false
         lastSavedProgressSec = -1
         lastProgressSaveAtMs = 0L
+        if (isValidSkipIntroWindow(skipIntroStartMs, skipIntroEndMs)) {
+            currentSkipIntroStartMs = skipIntroStartMs
+            currentSkipIntroEndMs = skipIntroEndMs
+            hasSkippedIntroInSession = initialHasSkippedIntro
+        } else {
+            currentSkipIntroStartMs = -1L
+            currentSkipIntroEndMs = -1L
+            hasSkippedIntroInSession = false
+        }
 
-        Log.d(TAG, "ExoPlayer: Playing stream: $streamUrl (Title: $title, resumeMs=$pendingResumePositionMs)")
+        Log.d(
+            TAG,
+            "ExoPlayer: Playing stream: $streamUrl (Title: $title, resumeMs=$pendingResumePositionMs, skipWindow=[$currentSkipIntroStartMs, $currentSkipIntroEndMs])"
+        )
 
         runOnUiThread {
             val wasAlreadyVisible = playerContainer.visibility == View.VISIBLE
@@ -1690,6 +1882,9 @@ class MainActivity : ComponentActivity() {
             playerErrorContainer.visibility = View.GONE
             playerProgressBar.visibility = View.VISIBLE
             playerTopBar.visibility = View.GONE
+            if (::skipIntroButton.isInitialized) {
+                skipIntroButton.visibility = View.GONE
+            }
             playerView.hideController()
 
             try {
@@ -1715,12 +1910,21 @@ class MainActivity : ComponentActivity() {
 
                     player.addListener(object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            updateSkipIntroButtonVisibility()
                             if (isPlaying) {
                                 startPlaybackTicker()
                             } else {
                                 stopPlaybackTicker()
                                 flushPlaybackProgressNow("pause")
                             }
+                        }
+
+                        override fun onPositionDiscontinuity(
+                            oldPosition: Player.PositionInfo,
+                            newPosition: Player.PositionInfo,
+                            reason: Int
+                        ) {
+                            updateSkipIntroButtonVisibility()
                         }
 
                         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1741,16 +1945,19 @@ class MainActivity : ComponentActivity() {
                                     }
                                     hasAppliedPendingSeek = true
                                     pendingResumePositionMs = 0L
+                                    updateSkipIntroButtonVisibility()
                                     flushPlaybackProgressNow("ready")
                                     Log.d(TAG, "ExoPlayer: Playback state READY")
                                 }
                                 Player.STATE_ENDED -> {
                                     stopPlaybackTicker()
                                     playerProgressBar.visibility = View.GONE
+                                    if (::skipIntroButton.isInitialized) skipIntroButton.visibility = View.GONE
                                     flushPlaybackProgressNow("ended", forceCompleted = true)
                                 }
                                 Player.STATE_IDLE -> {
                                     stopPlaybackTicker()
+                                    if (::skipIntroButton.isInitialized) skipIntroButton.visibility = View.GONE
                                 }
                             }
                         }
@@ -1814,6 +2021,7 @@ class MainActivity : ComponentActivity() {
                             }
                             playerErrorTextView.text = userErrorMessage
                             playerErrorContainer.visibility = View.VISIBLE
+                            if (::skipIntroButton.isInitialized) skipIntroButton.visibility = View.GONE
                         }
                     })
 
@@ -1890,8 +2098,14 @@ class MainActivity : ComponentActivity() {
             currentWatchIdx = -1
             pendingResumePositionMs = 0L
             hasAppliedPendingSeek = false
+            currentSkipIntroStartMs = -1L
+            currentSkipIntroEndMs = -1L
+            hasSkippedIntroInSession = false
             isVideoRotated180 = false
             applyVideoDisplayRotation(animate = false)
+            if (::skipIntroButton.isInitialized) {
+                skipIntroButton.visibility = View.GONE
+            }
             playerView.hideController()
             playerTopBar.visibility = View.GONE
             playerContainer.visibility = View.GONE
@@ -3484,6 +3698,27 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun playStreamWithContext(url: String, title: String, fid: String?, idx: Int, resumePositionMs: Long) {
             activity.playStream(url, title, fid, idx, resumePositionMs)
+        }
+
+        @JavascriptInterface
+        fun playStreamWithFullContext(
+            url: String,
+            title: String,
+            fid: String?,
+            idx: Int,
+            resumePositionMs: Long,
+            skipIntroStartMs: Long,
+            skipIntroEndMs: Long
+        ) {
+            activity.playStream(
+                rawUrl = url,
+                title = title,
+                fid = fid,
+                idx = idx,
+                resumePositionMs = resumePositionMs,
+                skipIntroStartMs = skipIntroStartMs,
+                skipIntroEndMs = skipIntroEndMs
+            )
         }
 
         @JavascriptInterface

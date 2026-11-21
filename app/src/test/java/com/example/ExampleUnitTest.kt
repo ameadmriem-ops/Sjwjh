@@ -85,4 +85,37 @@ class ExampleUnitTest {
         assertNotEquals(MainActivity.PREFS_SPA_STATE, MainActivity.PREFS_WATCH_PROGRESS)
         assertNotEquals(MainActivity.PREFS_SPA_STATE, MainActivity.PREFS_ADMOB)
     }
+
+    @Test
+    fun testSkipIntroWindowValidationAndVisibilityBoundaries() {
+        // Invalid or unset windows
+        assertFalse("Unset (-1, -1) window must be invalid", MainActivity.isValidSkipIntroWindow(-1L, -1L))
+        assertFalse("Equal bounds must be invalid", MainActivity.isValidSkipIntroWindow(90_000L, 90_000L))
+        assertFalse("End before start must be invalid", MainActivity.isValidSkipIntroWindow(90_000L, 60_000L))
+
+        // Valid windows (including starting at 00:00:00)
+        assertTrue("Intro starting at 00:00:00 should be valid", MainActivity.isValidSkipIntroWindow(0L, 90_000L))
+        assertTrue("Intro 01:30 -> 03:15 should be valid", MainActivity.isValidSkipIntroWindow(90_000L, 195_000L))
+
+        val startMs = 90_000L  // 00:01:30
+        val endMs = 195_000L   // 00:03:15
+
+        // Visibility across playback timeline
+        assertFalse("Must NOT appear before start time", MainActivity.shouldShowSkipIntroButton(89_999L, startMs, endMs, false))
+        assertTrue("Must appear at exact start time", MainActivity.shouldShowSkipIntroButton(90_000L, startMs, endMs, false))
+        assertTrue("Must remain visible mid-intro", MainActivity.shouldShowSkipIntroButton(140_000L, startMs, endMs, false))
+        assertFalse("Must auto-hide at exact end time", MainActivity.shouldShowSkipIntroButton(195_000L, startMs, endMs, false))
+        assertFalse("Must stay hidden after end time", MainActivity.shouldShowSkipIntroButton(220_000L, startMs, endMs, false))
+
+        // Session skip lock
+        assertFalse(
+            "Must NEVER reappear in same watch session once clicked even inside window",
+            MainActivity.shouldShowSkipIntroButton(120_000L, startMs, endMs, true)
+        )
+        // Re-opening fresh session or another episode resets hasSkippedInSession=false
+        assertTrue(
+            "New session before skip allows button again inside valid window",
+            MainActivity.shouldShowSkipIntroButton(120_000L, startMs, endMs, false)
+        )
+    }
 }
